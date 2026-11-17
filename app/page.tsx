@@ -34,10 +34,29 @@ type Lead = {
 
 const countries = [
   "USA",
-  "UK",
   "Canada",
+  "UK",
+  "Ireland",
+  "Malta",
+
   "Australia",
-  "UAE"
+  "New Zealand",
+  "Fiji",
+  "Papua New Guinea",
+
+  "UAE",
+
+  "India",
+  "Singapore",
+  "Philippines",
+  "Malaysia",
+
+  "Jamaica",
+  "Trinidad and Tobago",
+  "Barbados",
+  "Bahamas",
+  "Belize",
+  "Guyana"
 ];
 
 const industries = [
