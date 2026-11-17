@@ -1,16 +1,45 @@
-```typescript
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const COUNTRIES: Record<string, string> = {
+// ==========================================
+// HARVEY GLOBAL COUNTRY CONFIGURATION
+// ==========================================
+
+const ALLOWED_COUNTRIES: Record<string, string> = {
   USA: "United States",
-  UK: "United Kingdom",
   Canada: "Canada",
+  UK: "United Kingdom",
+  Ireland: "Ireland",
+  Malta: "Malta",
+
   Australia: "Australia",
-  UAE: "United Arab Emirates"
+  "New Zealand": "New Zealand",
+  Fiji: "Fiji",
+  "Papua New Guinea": "Papua New Guinea",
+
+  UAE: "United Arab Emirates",
+
+  India: "India",
+  Singapore: "Singapore",
+  Philippines: "Philippines",
+  Malaysia: "Malaysia",
+
+  Jamaica: "Jamaica",
+  "Trinidad and Tobago": "Trinidad and Tobago",
+  Barbados: "Barbados",
+  Bahamas: "Bahamas",
+  Belize: "Belize",
+  Guyana: "Guyana"
 };
+
+// Only countries in ALLOWED_COUNTRIES can be searched.
+// All other countries are automatically rejected.
+
+// ==========================================
+// SEARCH SERVERS
+// ==========================================
 
 const OVERPASS_SERVERS = [
   "https://overpass-api.de/api/interpreter",
@@ -18,43 +47,29 @@ const OVERPASS_SERVERS = [
   "https://overpass.private.coffee/api/interpreter"
 ];
 
-type OSMElement = {
-  id: number;
-  type: string;
-  tags?: Record<string, string>;
-  center?: {
-    lat: number;
-    lon: number;
-  };
-};
-
-function normalizeWebsite(value?: string) {
-  if (!value) return "";
-
-  const website = value.trim();
-
-  if (!website) return "";
-
-  return /^https?:\/\//i.test(website)
-    ? website
-    : `https://${website}`;
-}
+// ==========================================
+// INDUSTRY CLASSIFICATION
+// ==========================================
 
 function getIndustry(tags: Record<string, string>) {
+
   if (tags.industrial) return "Manufacturing";
+
   if (tags.shop) return "Retail";
 
   if (
-    tags.amenity === "hospital" ||
-    tags.amenity === "clinic" ||
-    tags.amenity === "doctors"
+    ["hospital", "clinic", "doctors"].includes(
+      tags.amenity || ""
+    )
   ) {
     return "Healthcare";
   }
 
   if (tags.tourism) return "Hospitality";
 
-  if (tags.office === "it" || tags.office === "software") {
+  if (
+    ["it", "software"].includes(tags.office || "")
+  ) {
     return "Technology";
   }
 
@@ -63,39 +78,44 @@ function getIndustry(tags: Record<string, string>) {
   return "Business";
 }
 
-function matchesIndustry(
-  tags: Record<string, string>,
-  selected: string
-) {
-  if (selected === "All") return true;
-
-  const category = getIndustry(tags);
-
-  if (selected === "Technology") {
-    return (
-      category === "Technology" ||
-      tags.office === "company" ||
-      tags.office === "coworking"
-    );
-  }
-
-  return category === selected;
-}
+// ==========================================
+// LEAD SCORING
+// ==========================================
 
 function scoreLead(tags: Record<string, string>) {
+
   let score = 25;
 
-  if (tags.website || tags["contact:website"]) score += 20;
-  if (tags.phone || tags["contact:phone"]) score += 10;
-  if (tags.email || tags["contact:email"]) score += 15;
-  if (tags.office) score += 10;
-  if (tags.industry) score += 10;
-  if (tags["addr:street"]) score += 5;
+  if (tags.website || tags["contact:website"])
+    score += 20;
+
+  if (tags.email || tags["contact:email"])
+    score += 15;
+
+  if (tags.phone || tags["contact:phone"])
+    score += 10;
+
+  if (tags.office)
+    score += 10;
+
+  if (tags.industry)
+    score += 10;
+
+  if (tags["addr:street"])
+    score += 5;
 
   return Math.min(score, 100);
 }
 
-async function discoverLocation(city: string, country: string) {
+// ==========================================
+// LOCATION DISCOVERY
+// ==========================================
+
+async function discoverLocation(
+  city: string,
+  country: string
+) {
+
   const url = new URL(
     "https://nominatim.openstreetmap.org/search"
   );
@@ -107,21 +127,21 @@ async function discoverLocation(city: string, country: string) {
 
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "HARVEY-InfoDart-LeadDiscovery/1.0"
+      "User-Agent": "HARVEY-InfoDart-Global/2.0"
     },
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(12000),
     cache: "no-store"
   });
 
   if (!response.ok) {
-    throw new Error("Location service unavailable.");
+    throw new Error("Location discovery service unavailable.");
   }
 
   const results = await response.json();
 
   if (!results.length) {
     throw new Error(
-      `Could not find ${city}, ${country}.`
+      `Location ${city}, ${country} was not found.`
     );
   }
 
@@ -131,8 +151,63 @@ async function discoverLocation(city: string, country: string) {
   };
 }
 
-function buildQuery(lat: number, lon: number) {
-  // Approximately 5 km around the selected city centre.
+// ==========================================
+// INDUSTRY FILTERS
+// ==========================================
+
+function industryQuery(
+  industry: string,
+  box: string
+) {
+
+  const filters: Record<string, string> = {
+
+    All: `
+      nwr["name"]["office"](${box});
+      nwr["name"]["shop"](${box});
+      nwr["name"]["industrial"](${box});
+      nwr["name"]["website"](${box});
+      nwr["name"]["contact:website"](${box});
+    `,
+
+    Technology: `
+      nwr["name"]["office"~"it|software|company|consulting"](${box});
+      nwr["name"]["website"](${box});
+    `,
+
+    Healthcare: `
+      nwr["name"]["amenity"~"hospital|clinic|doctors|dentist"](${box});
+    `,
+
+    Hospitality: `
+      nwr["name"]["tourism"~"hotel|motel|guest_house"](${box});
+    `,
+
+    Retail: `
+      nwr["name"]["shop"](${box});
+    `,
+
+    Professional: `
+      nwr["name"]["office"](${box});
+    `,
+
+    Manufacturing: `
+      nwr["name"]["industrial"](${box});
+    `
+  };
+
+  return filters[industry] || filters.All;
+}
+
+// ==========================================
+// OVERPASS SEARCH
+// ==========================================
+
+async function searchBusinesses(
+  lat: number,
+  lon: number,
+  industry: string
+) {
 
   const radius = 0.045;
 
@@ -143,129 +218,138 @@ function buildQuery(lat: number, lon: number) {
 
   const box = `${south},${west},${north},${east}`;
 
-  return `
+  const query = `
     [out:json][timeout:20];
 
     (
-      nwr["name"]["office"](${box});
-      nwr["name"]["shop"](${box});
-      nwr["name"]["industrial"](${box});
-
-      nwr["name"]["amenity"~"hospital|clinic|doctors|university|school"](${box});
-
-      nwr["name"]["tourism"~"hotel|motel|guest_house"](${box});
-
-      nwr["name"]["website"](${box});
-      nwr["name"]["contact:website"](${box});
+      ${industryQuery(industry, box)}
     );
 
     out center tags 100;
   `;
-}
 
-async function searchOverpass(query: string) {
-  let lastError = "All public business search servers are unavailable.";
+  let lastError = "Business search unavailable.";
 
   for (const server of OVERPASS_SERVERS) {
+
     try {
+
       const response = await fetch(server, {
+
         method: "POST",
 
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent": "HARVEY-InfoDart-LeadDiscovery/1.0"
+          "User-Agent": "HARVEY-InfoDart-Global/2.0"
         },
 
         body: new URLSearchParams({
           data: query
         }),
 
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(18000),
 
         cache: "no-store"
+
       });
 
       if (!response.ok) {
-        lastError = `Search server returned ${response.status}`;
+        lastError = `Search server error: ${response.status}`;
         continue;
       }
 
       const data = await response.json();
 
-      if (!Array.isArray(data.elements)) {
-        lastError = "Invalid business search response.";
-        continue;
+      if (Array.isArray(data.elements)) {
+        return data.elements;
       }
 
-      return data.elements as OSMElement[];
-
     } catch (error) {
+
       lastError =
         error instanceof Error
           ? error.message
-          : "Search server failed.";
+          : "Search failed.";
+
     }
   }
 
   throw new Error(lastError);
 }
 
+// ==========================================
+// MAIN API
+// ==========================================
+
 export async function GET(request: NextRequest) {
+
   try {
+
     const params = request.nextUrl.searchParams;
 
-    const country = params.get("country") || "USA";
-    const city = params.get("city") || "New York";
+    const country = params.get("country") || "";
+    const city = params.get("city") || "";
     const industry = params.get("industry") || "All";
 
-    if (!COUNTRIES[country]) {
-      return NextResponse.json(
-        { error: "Unsupported country." },
-        { status: 400 }
-      );
+    // STRICT COUNTRY VALIDATION
+
+    if (!ALLOWED_COUNTRIES[country]) {
+
+      return NextResponse.json({
+
+        success: false,
+
+        error: "This country is not permitted in HARVEY's targeting policy."
+
+      }, { status: 403 });
+
     }
 
     if (!city.trim() || city.length > 100) {
-      return NextResponse.json(
-        { error: "Please enter a valid city." },
-        { status: 400 }
-      );
+
+      return NextResponse.json({
+
+        success: false,
+
+        error: "Please enter a valid city."
+
+      }, { status: 400 });
+
     }
 
-    // 1. Find the city.
+    const countryName = ALLOWED_COUNTRIES[country];
+
+    // STEP 1: FIND LOCATION
 
     const location = await discoverLocation(
       city,
-      COUNTRIES[country]
+      countryName
     );
 
-    // 2. Build the business search.
+    // STEP 2: SEARCH BUSINESSES
 
-    const query = buildQuery(
+    const elements = await searchBusinesses(
       location.lat,
-      location.lon
+      location.lon,
+      industry
     );
 
-    // 3. Search multiple public servers.
-
-    const elements = await searchOverpass(query);
-
-    // 4. Convert records into business prospects.
+    // STEP 3: CREATE LEADS
 
     const leads = elements
-      .filter(element => element.tags?.name)
-      .filter(element =>
-        matchesIndustry(
-          element.tags || {},
-          industry
-        )
+
+      .filter((element: any) =>
+        element.tags?.name
       )
-      .map(element => {
+
+      .map((element: any) => {
+
         const tags = element.tags || {};
 
-        const website = normalizeWebsite(
-          tags.website || tags["contact:website"]
-        );
+        const website =
+          tags.website ||
+          tags["contact:website"] ||
+          "";
 
         const email =
           tags.email ||
@@ -278,11 +362,16 @@ export async function GET(request: NextRequest) {
           "";
 
         return {
+
           id: `${element.type}-${element.id}`,
 
           company: tags.name,
 
-          website,
+          website: website
+            ? /^https?:\/\//i.test(website)
+              ? website
+              : `https://${website}`
+            : "",
 
           email,
 
@@ -298,9 +387,7 @@ export async function GET(request: NextRequest) {
             tags["addr:housenumber"],
             tags["addr:street"],
             tags["addr:city"]
-          ]
-            .filter(Boolean)
-            .join(", "),
+          ].filter(Boolean).join(", "),
 
           score: scoreLead(tags),
 
@@ -309,24 +396,32 @@ export async function GET(request: NextRequest) {
 
           status: "New",
 
-          verified: true
+          sourceType: "Business Directory"
+
         };
+
       });
 
-    // 5. Remove duplicates.
+    // STEP 4: REMOVE DUPLICATES
 
-    const unique = Array.from(
+    const uniqueLeads = Array.from(
+
       new Map(
-        leads.map(lead => [lead.id, lead])
+        leads.map((lead: any) => [
+          lead.id,
+          lead
+        ])
       ).values()
+
     );
 
     return NextResponse.json({
+
       success: true,
 
-      total: unique.length,
+      total: uniqueLeads.length,
 
-      leads: unique,
+      leads: uniqueLeads,
 
       country,
 
@@ -336,27 +431,30 @@ export async function GET(request: NextRequest) {
 
       source: "OpenStreetMap",
 
-      message: unique.length
-        ? `${unique.length} businesses discovered.`
-        : "No matching businesses found in this search area."
+      targetingPolicy: "Approved Countries Only",
+
+      message:
+        `${uniqueLeads.length} business records discovered.`
+
     });
 
   } catch (error) {
-    console.error("HARVEY DISCOVERY ERROR:", error);
 
-    return NextResponse.json(
-      {
-        success: false,
+    console.error("HARVEY GLOBAL ERROR:", error);
 
-        leads: [],
+    return NextResponse.json({
 
-        error:
-          error instanceof Error
-            ? error.message
-            : "Lead discovery failed."
-      },
-      { status: 503 }
-    );
+      success: false,
+
+      leads: [],
+
+      error:
+        error instanceof Error
+          ? error.message
+          : "HARVEY search failed."
+
+    }, { status: 503 });
+
   }
+
 }
-```
